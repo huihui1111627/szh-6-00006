@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>区域电网黑启动推演台</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo"><div class="bolt">⚡</div>区域电网黑启动推演台</div>
+    <div class="strategy-box">
+      <small>当前策略</small>
+      <span id="strategy-name">—</span>
+    </div>
+    <span id="run-status" class="status-badge idle">● 待操作</span>
+    <span style="color:var(--muted);font-size:12px;">仿真时刻 <b id="sim-time" style="color:var(--text)">0分00秒</b></span>
+    <div class="header-spacer"></div>
+    <button class="hbtn" id="btn-branch">分叉对照</button>
+    <button class="hbtn" id="btn-compare">策略对照</button>
+    <button class="hbtn" id="btn-reset">重置</button>
+    <button class="hbtn primary" id="btn-new-strategy">+ 新建策略</button>
+    <button class="hbtn" id="btn-help">操作说明</button>
+  </header>
+
+  <main class="main">
+    <div class="grid-wrap">
+      <svg id="grid-svg" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <aside class="side">
+      <section class="panel">
+        <h3>运行指标</h3>
+        <div id="metrics"></div>
+      </section>
+      <section class="panel">
+        <h3>操作面板</h3>
+        <div id="action-card"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    <div class="chart-panel">
+      <h3>频率波动过程（本步暂态）</h3>
+      <div class="speed-row">
+        <button class="speed-btn" data-speed="10">×10</button>
+        <button class="speed-btn" data-speed="40">×40</button>
+        <button class="speed-btn" data-speed="120">×120</button>
+        <button class="speed-btn" data-speed="400">×400</button>
+      </div>
+      <canvas id="freq-canvas"></canvas>
+    </div>
+    <div style="flex:1.5;display:flex;flex-direction:column;gap:10px;min-width:0;">
+      <section class="panel" style="flex:1.1;display:flex;flex-direction:column;min-height:0;">
+        <h3>操作步骤（可回退）</h3>
+        <div id="step-list" style="overflow-y:auto;"></div>
+      </section>
+      <section class="log-panel" style="flex:1;min-height:0;">
+        <h3>告警与保护动作</h3>
+        <div id="alarm-list"></div>
+      </section>
+    </div>
+  </footer>
+</div>
+
+<div id="strategy-tabs" style="position:fixed;left:10px;bottom:182px;z-index:20;"></div>
+
+<!-- 策略对照弹窗 -->
+<div class="modal hidden" id="modal-compare">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>恢复策略对照</h2>
+      <button class="modal-close" id="btn-close-compare">×</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>策略</th><th>步数</th><th>总耗时</th><th>风险积分</th>
+        <th>负荷恢复</th><th>未恢复范围</th><th>带电范围</th><th>结果</th>
+      </tr></thead>
+      <tbody id="compare-body"></tbody>
+    </table>
+    <p style="color:var(--muted);font-size:11.5px;margin-top:12px;line-height:1.6;">
+      点击任意行可切换到该策略继续推演。风险积分综合了频率越限幅度×时长与线路过载程度，数值越低越安全；
+      「未恢复范围」是尚未恢复的负荷 MW 数。可在顶部用「分叉对照」复制当前策略后尝试不同恢复顺序。
+    </p>
+  </div>
+</div>
+
+<!-- 操作说明弹窗 -->
+<div class="modal hidden" id="modal-help">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>黑启动推演操作说明</h2>
+      <button class="modal-close" id="btn-close-help">×</button>
+    </div>
+    <div class="help-content">
+      <h3>背景</h3>
+      <p>区域电网大面积停电后，利用具备自启动能力的水电/燃机作为黑启动电源，逐步恢复火电厂厂用电源、送电线路与负荷，最终实现全网恢复。每一步操作都必须先通过系统校核，再经历频率与潮流的波动稳定过程后才真正生效。</p>
+      <h3>四类操作</h3>
+      <ul>
+        <li><b>启动电源</b>：白水河水电、云台山燃机可直接黑启动；北岭/东港火电无自启动能力，必须先由带电线路送入厂用电源。</li>
+        <li><b>接入线路（合闸 ×）</b>：一侧带电可对线路充电；两侧均为带电分区时执行同期并列，频差超过 <code>0.20Hz</code> 被保护闭锁。</li>
+        <li><b>合并分区</b>：同期并列后两分区合并，功率冲击按频差大小产生频率波动。</li>
+        <li><b>分批恢复负荷</b>：点击负荷选择 <code>10/20/30/50MW</code> 批次。孤网首批负荷过大将触发低频减载（<code>49.0Hz</code>）甚至频率崩溃（<code>48.5Hz</code>）。</li>
+      </ul>
+      <h3>失败与回退</h3>
+      <ul>
+        <li>错误顺序会导致：频率越界、低频减载、线路持续过载（超过载流量 <code>8s</code> 或达 <code>125%</code> 瞬时）跳闸、已恢复区域再次掉电。</li>
+        <li>失败后现场冻结（开关位置、频率、潮流均保留），所有新操作被闭锁；可在右侧面板或步骤列表中回退到任意一步之前重新决策。</li>
+      </ul>
+      <h3>策略对照与断点续演</h3>
+      <ul>
+        <li>可同时保存多个策略，用「策略对照」并排比较总耗时、风险积分、未恢复范围；用「分叉对照」复制策略试验不同顺序。</li>
+        <li>所有状态自动保存在浏览器本地，关闭/刷新页面后重新打开会自动接续当前策略的全部步骤与现场。</li>
+      </ul>
+      <h3>参考恢复路径</h3>
+      <ul>
+        <li>西：白水河→西郊→城西（小批）→中心；东：云台山→东湖→城东（小批）；频差合格后并列两分区。</li>
+        <li>再由中心→北站→北岭火电，启动大火电后恢复中心城区；打通南通道（西郊-南岭-南港-东港）启动东港火电。</li>
+        <li>东部负荷密集时东西间仅靠单回联络线会过载，应提前合上北站-东湖第二通道分流。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="js/data.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/store.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
